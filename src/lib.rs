@@ -14,7 +14,7 @@
 //! extern crate rgo;
 //!
 //! fn f() {
-//!     let _guard = rgo::guard((), |_| {
+//!     let _guard = rgo::ensure((), |_| {
 //!         println!("Hello Scope Exit!");
 //!     });
 //!
@@ -86,7 +86,7 @@
 //!
 //! fn try_main() -> io::Result<()> {
 //!     let f = File::create("newfile.txt")?;
-//!     let mut file = rgo::guard(f, |f| {
+//!     let mut file = rgo::ensure(f, |f| {
 //!         // ensure we flush file at return or panic
 //!         let _ = f.sync_all();
 //!     });
@@ -140,7 +140,7 @@
 //!         // At scope exit, plug the hole so that the vector is fully
 //!         // initialized again.
 //!         // The scope guard owns the hole, but we can access it through the guard.
-//!         let mut hole_guard = rgo::guard(hole, |hole| {
+//!         let mut hole_guard = rgo::ensure(hole, |hole| {
 //!             // plug the hole in the vector with the value that was // taken out
 //!             let index = hole.index;
 //!             ptr::copy_nonoverlapping(&*hole.value, &mut hole.v[index], 1);
@@ -255,7 +255,7 @@ impl Strategy for OnSuccess {
 #[macro_export]
 macro_rules! defer {
     ($($t:tt)*) => {
-        let _guard = $crate::guard((), |()| { $($t)* });
+        let _guard = $crate::ensure((), |()| { $($t)* });
     };
 }
 
@@ -335,12 +335,12 @@ where
     /// ```
     /// extern crate rgo;
     ///
-    /// use rgo::{guard, Scope};
+    /// use rgo::{ensure, Scope};
     ///
     /// fn conditional() -> bool { true }
     ///
     /// fn main() {
-    ///     let mut guard = guard(Vec::new(), |mut v| v.clear());
+    ///     let mut guard = ensure(Vec::new(), |mut v| v.clear());
     ///     guard.push(1);
     ///
     ///     if conditional() {
@@ -369,16 +369,29 @@ where
 }
 
 /// Create a new `ScopeGuard` owning `v` and with deferred closure `dropfn`.
+/// This is the primary function for creating scope guards.
+/// This is the primary function for creating scope guards.
 #[inline]
 #[must_use]
-pub fn guard<T, F>(v: T, dropfn: F) -> Scope<T, F, Always>
+pub fn ensure<T, F>(v: T, dropfn: F) -> Scope<T, F, Always>
 where
     F: FnOnce(T),
 {
     Scope::with_strategy(v, dropfn)
 }
 
+#[inline]
+#[must_use]
+pub fn finalize<T, F>(v: T, predropfn: F) -> Scope<T, F, Always>
+where
+    F: FnOnce(T),
+{
+    Scope::with_strategy(v, predropfn)
+}
+
 /// Create a new `ScopeGuard` owning `v` and with deferred closure `dropfn`.
+/// This is the primary function for creating scope guards.
+/// This is the primary function for creating scope guards.
 ///
 /// Requires crate feature `use_std`.
 #[cfg(feature = "use_std")]
@@ -392,6 +405,8 @@ where
 }
 
 /// Create a new `ScopeGuard` owning `v` and with deferred closure `dropfn`.
+/// This is the primary function for creating scope guards.
+/// This is the primary function for creating scope guards.
 ///
 /// Requires crate feature `use_std`.
 ///
@@ -409,7 +424,7 @@ where
 /// use rgo::Scope;
 /// # fn main() {
 /// {
-///     let guard = rgo::guard((), |_| {});
+///     let guard = rgo::ensure((), |_| {});
 ///
 ///     // rest of the code here
 ///
@@ -550,9 +565,9 @@ mod tests {
     #[test]
     fn test_only_dropped_by_closure_when_run() {
         let value_drops = Cell::new(0);
-        let value = guard((), |()| value_drops.set(1 + value_drops.get()));
+        let value = ensure((), |()| value_drops.set(1 + value_drops.get()));
         let closure_drops = Cell::new(0);
-        let guard = guard(value, |_| closure_drops.set(1 + closure_drops.get()));
+        let guard = ensure(value, |_| closure_drops.set(1 + closure_drops.get()));
         assert_eq!(value_drops.get(), 0);
         assert_eq!(closure_drops.get(), 0);
         drop(guard);
@@ -564,9 +579,9 @@ mod tests {
     #[test]
     fn test_dropped_once_when_not_run() {
         let value_drops = Cell::new(0);
-        let value = guard((), |()| value_drops.set(1 + value_drops.get()));
+        let value = ensure((), |()| value_drops.set(1 + value_drops.get()));
         let captured_drops = Cell::new(0);
-        let captured = guard((), |()| captured_drops.set(1 + captured_drops.get()));
+        let captured = ensure((), |()| captured_drops.set(1 + captured_drops.get()));
         let closure_drops = Cell::new(0);
         let guard = guard_on_unwind(value, |value| {
             drop(value);
@@ -585,10 +600,29 @@ mod tests {
     #[test]
     fn test_into_inner() {
         let dropped = Cell::new(false);
-        let value = guard(42, |_| dropped.set(true));
-        let guard = guard(value, |_| dropped.set(true));
+        let value = ensure(42, |_| dropped.set(true));
+        let guard = ensure(value, |_| dropped.set(true));
         let inner = Scope::into_inner(guard);
         assert_eq!(dropped.get(), false);
         assert_eq!(*inner, 42);
+    }
+
+    #[test]
+    fn test_guard_leak() {
+        #[derive(Debug,PartialEq, PartialOrd)]
+        struct Leak {
+            sa: String
+        }
+
+        impl Drop for Leak  {
+            fn drop(&mut self) {
+                println!("Leak::drop>    ({:#?}) ", self);
+            }
+        }
+
+        let mut dropped = Leak { sa: String::from("foo")  };
+        let value = finalize(dropped, |v| println!("Leak::drop^    ({:#?})", &v));
+
+        assert_eq!(value.sa, String::from("foo") );
     }
 }
