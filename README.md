@@ -8,7 +8,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-rgo = "1.0"
+rgo = "0.2.0"
 ```
 
 ## Usage
